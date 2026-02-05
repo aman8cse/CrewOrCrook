@@ -125,7 +125,7 @@ io.on("connection", (socket) => {
 
 const PORT = process.env.PORT || 5000;
 const MONGO_URI =
-  process.env.MONGO_URI || "mongodb://localhost:27017/creworcrook";
+  process.env.MONGO_URI || "mongodb+srv://aman8cse_db_user:lPvDkZMRdelca6qi@cluster0.xy6rfhm.mongodb.net/";
 
 server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
