@@ -10,10 +10,17 @@ export const register = async({ username, password, email, zealId, rollNo, secti
         throw new Error("Missing required fields");
     }
 
-    const existing = await User.findOne({ username });
-    if(existing) {
+    const existingUser = await User.findOne({ username });
+    if(existingUser) {
         console.log("User already exists");
         const err = new Error("User already exists");
+        err.status = 400;
+        throw err;
+    }
+    const existingMail = await User.findOne({ email });
+    if(email && existingMail) {
+        console.log("Email already exists");
+        const err = new Error("Email already exists");
         err.status = 400;
         throw err;
     }
@@ -38,7 +45,7 @@ export const register = async({ username, password, email, zealId, rollNo, secti
             email: user.email
         }
     };
-}
+};
 
 //user login function
 export const login = async ({ username, password }) => {
