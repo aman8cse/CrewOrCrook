@@ -1,5 +1,9 @@
 import { getRoomByCode, addPlayerToRoom } from "../services/roomService.js";
 import Player from "../models/playerModel.js";
+import User from "../models/userModel.js";
+import Room from "../models/roomModel.js";
+import { assignImposter } from "../utils/assignImposter.js";
+import { initGameState } from "../services/gameStateService.js";
 import { GAME_STATE } from "../constants.js";
 
 export default function lobbySocketHandler(io, socket) {
@@ -59,14 +63,48 @@ export default function lobbySocketHandler(io, socket) {
 
       socket.join(roomCode);
 
+      // Fetch the username to include in the broadcast
+      const userDoc = await User.findById(userId).select("username").lean();
+      const username = userDoc?.username ?? null;
+
       socket.to(roomCode).emit("lobby:player-joined", {
-        user: userId,
+        userId,
         playerId: player._id,
+        username,
       });
 
       console.log(
-        `User ${userId} joined lobby ${roomCode} via socket ${socket.id}`
+        `User ${userId} (${username}) joined lobby ${roomCode} via socket ${socket.id}`
       );
+
+      // ── Auto-start when room is full ──────────────────────────
+      const freshRoom = await Room.findById(room._id);
+      if (freshRoom.players.length >= freshRoom.maxPlayers) {
+        console.log(`Room ${roomCode} is full — auto-starting game`);
+
+        try {
+          await assignImposter(room._id);
+
+          freshRoom.state = GAME_STATE.STARTED;
+          await freshRoom.save();
+
+          const players = await Player.find({ roomId: room._id });
+          await initGameState(roomCode, players);
+
+          // Notify everyone the game started
+          io.to(roomCode).emit("game:started");
+
+          // Send each player their private role
+          for (const p of players) {
+            if (p.socketId) {
+              io.to(p.socketId).emit("game:role", { role: p.role });
+            }
+          }
+        } catch (err) {
+          console.error("Auto-start error:", err.message);
+          io.to(roomCode).emit("game:error", { message: "Failed to auto-start game" });
+        }
+      }
 
       callback?.({ ok: true, roomCode, player });
     } catch (err) {
