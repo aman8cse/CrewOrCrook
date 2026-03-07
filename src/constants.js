@@ -18,7 +18,7 @@ export const PHASE = {
 }
 
 export const GAME_CONFIG = {
-  MIN_PLAYERS: 3,                 // minimum players to start a game
+  MIN_PLAYERS: 2,                 // minimum players to start a game
   KILL_RANGE_METRES: 8,
   REPORT_RANGE_METRES: 8,
   KILL_COOLDOWN_MS: 30_000,       // 30 seconds
