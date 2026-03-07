@@ -12,15 +12,6 @@ const playerSchema = new mongoose.Schema(
       enum: ["crewmate", "imposter"],
       default: "crewmate",
     },
-
-    alive: { type: Boolean, default: true },
-
-    position: {
-      x: { type: Number, default: 0 },
-      y: { type: Number, default: 0 },
-    },
-
-    tasksCompleted: { type: Number, default: 0 },
   },
   { timestamps: true }
 );

@@ -1,5 +1,6 @@
 import Player from "../models/playerModel.js";
 import Room from "../models/roomModel.js";
+import { GAME_CONFIG } from "../constants.js";
 
 export async function assignImposter(roomId) {
   const room = await Room.findById(roomId).populate("players");
@@ -8,8 +9,8 @@ export async function assignImposter(roomId) {
     throw new Error("Modifying Imposter -> Room not found");
   }
 
-  if (!room.players || room.players.length < 2) {
-    throw new Error("Not enough players to assign imposter");
+  if (!room.players || room.players.length < GAME_CONFIG.MIN_PLAYERS) {
+    throw new Error(`Not enough players to assign imposter (need ${GAME_CONFIG.MIN_PLAYERS})`);
   }
 
   // pick random player
