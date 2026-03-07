@@ -77,6 +77,39 @@ export default function lobbySocketHandler(io, socket) {
         `User ${userId} (${username}) joined lobby ${roomCode} via socket ${socket.id}`
       );
 
+      // ── Broadcast full player list to everyone (including the new joiner) ──
+      const allPlayers = await Player.find({ roomId: room._id })
+        .select("userId socketId")
+        .lean();
+
+      const userIds = allPlayers.map((p) => p.userId);
+      const userDocs = await User.find({ _id: { $in: userIds } })
+        .select("username avatar")
+        .lean();
+
+      const userMap = Object.fromEntries(
+        userDocs.map((u) => [u._id.toString(), u])
+      );
+
+      const playersList = allPlayers.map((p) => ({
+        playerId: p._id,
+        userId: p.userId,
+        username: userMap[p.userId.toString()]?.username ?? null,
+        avatar: userMap[p.userId.toString()]?.avatar ?? null,
+        isConnected: !!p.socketId,
+      }));
+
+      // Fetch host info for the room
+      const roomWithHost = await Room.findById(room._id)
+        .select("host")
+        .lean();
+
+      io.to(roomCode).emit("lobby:players-list", {
+        roomCode,
+        hostId: roomWithHost.host,
+        players: playersList,
+      });
+
       // ── Auto-start when room is full ──────────────────────────
       const freshRoom = await Room.findById(room._id);
       if (freshRoom.players.length >= freshRoom.maxPlayers) {
