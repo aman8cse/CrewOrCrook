@@ -105,8 +105,31 @@ If the same user reconnects (e.g. app killed and reopened), calling this again w
 ### Listening from Server
 
 #### `lobby:player-joined`
-Received by all players already in the lobby when a new player joins.
+Received by all players already in the lobby when a new player joins. This is a lightweight notification — use `lobby:players-list` for the full roster.
 - **Payload**: `{ "userId": "...", "playerId": "dbPlayerId", "username": "player1" }`
+
+#### `lobby:players-list`
+Broadcast to **all** players in the room (including the newly joined player) every time someone joins. This is the primary event to drive the lobby UI — it contains the **complete, up-to-date roster** of everyone in the room, just like the Among Us lobby screen.
+
+- **Payload**:
+  ```json
+  {
+    "roomCode": "ABCDEF",
+    "hostId": "userId of the room host",
+    "players": [
+      {
+        "playerId": "dbPlayerId",
+        "userId": "userId",
+        "username": "player1",
+        "avatar": "avatarUrl or null",
+        "isConnected": true
+      }
+    ]
+  }
+  ```
+
+- **When you receive it**: Every time a new player joins the room. The first time **you** join, this is how you discover who else is already in the lobby.
+- **Android usage**: Replace your entire lobby player list with the `players` array from this event. Highlight the host using `hostId`. Use `isConnected` to show a "disconnected" indicator for players whose socket dropped.
 
 ---
 
@@ -279,7 +302,8 @@ If a player's connection drops mid-game, the correct sequence is:
    - To join: `GET /room/available` → pick a room → note `code`.
 4. **Join Room via Socket**: Emit `lobby:join-room` with `roomCode`.
    - Registers the player in the DB and joins the real-time lobby in one step.
-   - Listen for `lobby:player-joined` to update the waiting room UI.
+   - Listen for `lobby:players-list` to render/update the full lobby roster (Among Us–style).
+   - Optionally listen for `lobby:player-joined` for lightweight join notifications (e.g. toast "player1 joined!").
 5. **Wait for Game Start**:
    - If room is manually started by host: listen for `game:started` after host emits `game:start`.
    - If room fills to `maxPlayers`: `game:started` fires automatically — **no host action needed**.
