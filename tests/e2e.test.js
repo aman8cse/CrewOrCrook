@@ -685,7 +685,9 @@ async function runTaskTests() {
   console.log(`    Room code: ${tRoomCode}`);
 
   // ── T3. SOCKET CONNECT + JOIN ROOM (unified) ──
-  console.log("\n🔌 T-Step 3: Connect sockets & join room via lobby:join-room");
+  // The room has maxPlayers=6. When the 6th player calls lobby:join-room the
+  // server auto-starts the game (no manual game:start needed).
+  console.log("\n🔌 T-Step 3: Connect sockets & join room (auto-start on 6th player)");
   const tSocks = [];
   for (let i = 0; i < PLAYER_COUNT; i++) {
     const sock = await connectSocket(tTokens[i]);
@@ -693,21 +695,26 @@ async function runTaskTests() {
     tSocks.push(sock);
   }
 
-  for (let i = 0; i < PLAYER_COUNT; i++) {
+  // Set up game:started / game:role listeners BEFORE the last join fires auto-start
+  const tRolePromises = tSocks.map((s) => waitForEvent(s, "game:role", 8000));
+  const tStartedPromise = waitForEvent(tSocks[0], "game:started", 8000);
+
+  // Players 0–4 join normally (no auto-start yet)
+  for (let i = 0; i < PLAYER_COUNT - 1; i++) {
     const ack = await emitWithAck(tSocks[i], "lobby:join-room", { roomCode: tRoomCode });
     assert(`${tNames[i]} joins room via socket`, ack.ok === true, JSON.stringify(ack));
   }
 
-  // ── T4. START GAME & RECEIVE ROLES ──
-  console.log("\n🎮 T-Step 4: Start game & receive roles");
+  // 6th player joins — room is now full → auto-start fires
+  console.log("\n🚀 T-Step 3b: 6th player joins — auto-start fires");
+  const lastAck = await emitWithAck(tSocks[PLAYER_COUNT - 1], "lobby:join-room", { roomCode: tRoomCode });
+  assert(`${tNames[PLAYER_COUNT - 1]} joins room via socket (triggers auto-start)`, lastAck.ok === true, JSON.stringify(lastAck));
 
-  const tRolePromises = tSocks.map((s) => waitForEvent(s, "game:role"));
-  const tStartedPromise = waitForEvent(tSocks[0], "game:started");
-
-  const tStartAck = await emitWithAck(tSocks[0], "game:start", { roomCode: tRoomCode });
-  assert("game:start ack", tStartAck.ok === true, JSON.stringify(tStartAck));
+  // ── T4. RECEIVE ROLES FROM AUTO-START ──
+  console.log("\n🎮 T-Step 4: Receive roles (game auto-started)");
 
   await tStartedPromise;
+  assert("game:started received after auto-start", true);
 
   const tRoles = await Promise.all(tRolePromises);
   for (let i = 0; i < PLAYER_COUNT; i++) {
@@ -833,12 +840,143 @@ async function runTaskTests() {
   tSocks.forEach((s) => s.disconnect());
 }
 
+// ─── Suite 4: username in player-joined + auto-start on max players ──
+
+async function runAutoStartTests() {
+  console.log("\n╔══════════════════════════════════════════╗");
+  console.log("║  Suite 4: Username in player-joined &    ║");
+  console.log("║           Auto-start on maxPlayers       ║");
+  console.log("╚══════════════════════════════════════════╝\n");
+
+  const A = Date.now();
+  // Use 6 players to fill the default maxPlayers (6) and trigger auto-start
+  const MAX = 6;
+  const aNames = Array.from({ length: MAX }, (_, i) => `ahost${i}_${A}`);
+  const aTokens = [];
+  const aLoginData = [];
+
+  // ── A1. REGISTER & LOGIN ──
+  console.log("📝 A-Step 1: Register & login 6 fresh users");
+  for (const name of aNames) {
+    const reg = await post("/auth/register", { username: name, password: "test1234" });
+    assert(`Register ${name}`, reg.status === 201, `status=${reg.status}`);
+  }
+  for (const name of aNames) {
+    const login = await post("/auth/login", { username: name, password: "test1234" });
+    assert(`Login ${name}`, login.status === 200 && login.data.accessToken, `status=${login.status}`);
+    aTokens.push(login.data.accessToken);
+    aLoginData.push(login.data);
+  }
+
+  // ── A2. CREATE ROOM ──
+  console.log("\n🏠 A-Step 2: Create room");
+  const aCr = await post("/room/createNew", {}, aTokens[0]);
+  assert("Create room", aCr.status === 201 && aCr.data.code, `status=${aCr.status}`);
+  const aRoomCode = aCr.data.code;
+  console.log(`    Room code: ${aRoomCode}`);
+
+  // ── A3. CONNECT SOCKETS ──
+  console.log("\n🔌 A-Step 3: Connect sockets");
+  const aSocks = [];
+  for (let i = 0; i < MAX; i++) {
+    const sock = await connectSocket(aTokens[i]);
+    assert(`Socket ${i + 1} connected`, !!sock.id);
+    aSocks.push(sock);
+  }
+
+  // ── A4. JOIN ROOM — track player-joined events with username ──
+  console.log("\n👥 A-Step 4: Join room — verify username in player-joined events");
+
+  // Socket 0 (host) joins first. It won't receive its own player-joined event.
+  // Each subsequent player's join should be broadcast to all already-in-room sockets.
+  const receivedUsernames = [];
+
+  // Set up listener on socket 0 before anyone else joins
+  aSocks[0].on("lobby:player-joined", (data) => {
+    receivedUsernames.push(data.username);
+  });
+
+  // Host joins (no player-joined broadcast for self)
+  const hostJoinAck = await emitWithAck(aSocks[0], "lobby:join-room", { roomCode: aRoomCode });
+  assert("Host joins room", hostJoinAck.ok === true, JSON.stringify(hostJoinAck));
+
+  // Players 1–4 join sequentially (player 5 will trigger auto-start)
+  for (let i = 1; i < MAX - 1; i++) {
+    const ack = await emitWithAck(aSocks[i], "lobby:join-room", { roomCode: aRoomCode });
+    assert(`${aNames[i]} joins room`, ack.ok === true, JSON.stringify(ack));
+    await sleep(100); // give the broadcast time to arrive
+  }
+
+  // Verify usernames were received for players 1–4
+  await sleep(300);
+  assert(
+    `player-joined broadcasts received (got ${receivedUsernames.length}/4)`,
+    receivedUsernames.length === MAX - 2,   // players 1..4 (5 not yet joined)
+    `received: ${JSON.stringify(receivedUsernames)}`
+  );
+  for (let i = 1; i < MAX - 1; i++) {
+    assert(
+      `Username for ${aNames[i]} present in broadcast`,
+      receivedUsernames.includes(aNames[i]),
+      `received: ${JSON.stringify(receivedUsernames)}`
+    );
+  }
+
+  // ── A5. FINAL PLAYER JOINS — auto-start should fire ──
+  console.log("\n🚀 A-Step 5: 6th player joins — auto-start should fire");
+
+  // Set up game:started and game:role listeners on ALL sockets BEFORE the last join
+  const aStartedPromises = aSocks.map((s) => waitForEvent(s, "game:started", 5000));
+  const aRolePromises = aSocks.map((s) => waitForEvent(s, "game:role", 5000));
+
+  // 6th player joins — this should push the room to maxPlayers and trigger auto-start
+  const lastJoinAck = await emitWithAck(aSocks[MAX - 1], "lobby:join-room", { roomCode: aRoomCode });
+  assert("6th player joins room", lastJoinAck.ok === true, JSON.stringify(lastJoinAck));
+
+  // Wait for game:started to arrive on all sockets
+  const aStartedEvents = await Promise.all(aStartedPromises);
+  assert("All 6 players received game:started", aStartedEvents.length === MAX);
+  console.log("    game:started received by all players");
+
+  // Wait for game:role to arrive on all sockets
+  const aRoles = await Promise.all(aRolePromises);
+  for (let i = 0; i < MAX; i++) {
+    assert(`${aNames[i]} received game:role`, !!aRoles[i]?.role, `role=${aRoles[i]?.role}`);
+    console.log(`    ${aNames[i]}: ${aRoles[i].role}`);
+  }
+
+  const aImpostorCount = aRoles.filter((r) => r.role === "imposter").length;
+  assert("Exactly 1 impostor assigned via auto-start", aImpostorCount === 1, `count=${aImpostorCount}`);
+
+  const aCrewCount = aRoles.filter((r) => r.role === "crewmate").length;
+  assert("5 crewmates assigned via auto-start", aCrewCount === 5, `count=${aCrewCount}`);
+
+  // ── A6. VERIFY ROOM STATE — game:start should now FAIL (already started) ──
+  console.log("\n🚫 A-Step 6: Host tries to manually start (should fail — already started)");
+
+  const manualStartAck = await emitWithAck(aSocks[0], "game:start", { roomCode: aRoomCode });
+  assert(
+    "Manual game:start rejected after auto-start",
+    manualStartAck.ok === false,
+    manualStartAck.message || "unexpected success"
+  );
+  console.log(`    Server says: ${manualStartAck.message}`);
+
+  // ─── SUITE 4 SUMMARY ──────────────────────────────────────────
+  console.log("\n══════════════════════════════════════════");
+  console.log(`  Suite 4 (Auto-start + username) complete`);
+  console.log("══════════════════════════════════════════\n");
+
+  aSocks.forEach((s) => s.disconnect());
+}
+
 // ─── Run all suites ──────────────────────────────────────────────
 
 async function runAll() {
   await runTests();
   await runVotingTests();
   await runTaskTests();
+  await runAutoStartTests();
 
   console.log("╔══════════════════════════════════════════╗");
   console.log(`║  TOTAL: ${passed} passed, ${failed} failed, ${skipped} skipped`);
