@@ -19,6 +19,7 @@ import {
   getBodies,
   getNearbyTargets,
   finishGame,
+  playerDisconnect,
 } from "../services/gameStateService.js";
 
 
@@ -347,10 +348,26 @@ export default function gameSocketHandler(io, socket) {
   socket.on("disconnect", async () => {
     console.log("Game socket disconnect:", socket.id);
     try {
-      const player = await Player.findOne({ socketId: socket.id });
-      if (player) {
-        console.log(`Player ${player.userId} disconnected from game`);
+      const userId = socket.user.id;
+      const roomCode = socket.data?.roomCode;
+
+      if(!userId || !roomCode) return;
+
+      const result = await playerDisconnect(roomCode, userId);
+
+      io.to(roomCode).emit("game:player-disconnected", {userId});
+      console.log(`Player ${userId} disconnected from in-game`);
+
+      if(result.ended) {
+        io.to(roomCode).emit("game:ended", {winner: result.winner});
+        await finishGame(roomCode);
       }
+
+      await Player.findOneAndUpdate(
+        { socketId: socket.id },
+        { socketId: null }
+      );
+
     } catch (err) {
       console.error("Game disconnect error:", err.message);
     }

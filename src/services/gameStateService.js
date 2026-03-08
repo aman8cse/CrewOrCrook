@@ -394,6 +394,37 @@ export async function incrementTask(roomCode, userId) {
   };
 }
 
+export async function playerDisconnect(roomCode, userId) {
+  const state = await getGameStateSafe(roomCode);
+
+  const player = state.players[userId];
+  if (!player || !player.alive) {
+    return { ended: false };
+  }
+
+  player.alive = false;
+  player.disconnected = true;
+  if (player.role === PLAYER_ROLE.CREWMATE) {
+    const task = state.tasks;
+    const remaining = task.total - task.completed;
+
+    if (remaining > GAME_CONFIG.FREE_TASKS) {
+      task.total -= GAME_CONFIG.FREE_TASKS;
+    }
+  }
+
+  const result = evaluateWinCondition(state);
+
+  if(result.ended) {
+    state.phase = PHASE.ENDED;
+    state.winner = result.winner;
+  }
+
+  await saveGameState(roomCode, state);
+
+  return result;
+}
+
 // ─── Voting ──────────────────────────────────────────────────────
 
 export async function registerVote(roomCode, voterId, targetId) {

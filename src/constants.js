@@ -18,6 +18,7 @@ export const PHASE = {
 }
 
 export const GAME_CONFIG = {
+  FREE_TASKS: 5,                  // when player disconnects in-game
   MIN_PLAYERS: 2,                 // minimum players to start a game
   KILL_RANGE_METRES: 8,
   REPORT_RANGE_METRES: 8,
