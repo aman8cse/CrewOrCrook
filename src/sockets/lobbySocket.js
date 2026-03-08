@@ -54,6 +54,9 @@ export default function lobbySocketHandler(io, socket) {
           return callback?.({ ok: false, message: "Room is full" });
         }
 
+        //saving roomCode in socket for future use, in-case roomCode is not in event payload
+        socket.data.roomCode = roomCode;
+
         player = await addPlayerToRoom({
           room,
           userId,
