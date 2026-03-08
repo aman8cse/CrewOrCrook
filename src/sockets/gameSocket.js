@@ -362,7 +362,12 @@ export default function gameSocketHandler(io, socket) {
         io.to(roomCode).emit("game:ended", {winner: result.winner});
         await finishGame(roomCode);
       }
-      
+
+      await Player.findOneAndUpdate(
+        { socketId: socket.id },
+        { socketId: null }
+      );
+
     } catch (err) {
       console.error("Game disconnect error:", err.message);
     }
