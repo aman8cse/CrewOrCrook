@@ -104,6 +104,7 @@ io.on("connection", (socket) => {
 });
 
 // GAME TIMER LOOP
+/*
 setInterval(async () => {
   try {
     const keys = await redisClient.keys("game:*");
@@ -139,7 +140,7 @@ setInterval(async () => {
     console.error("Timer loop error:", err.message);
   }
 }, 3000); // every 3 seconds
-
+*/
 
 //SERVER + DB START
 
