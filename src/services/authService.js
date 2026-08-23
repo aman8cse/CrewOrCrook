@@ -25,16 +25,20 @@ export const register = async({ username, password, email, zealId, rollNo, secti
         throw err;
     }
 
+    const cleanEmail = typeof email === 'string' ? email.trim() : undefined;
+    const cleanZealId = typeof zealId === 'string' ? zealId.trim() || undefined : undefined;
+    const cleanRollNo = typeof rollNo === 'string' ? rollNo.trim() || undefined : undefined;
+    const cleanSection = typeof section === 'string' ? section.trim() || undefined : undefined;
     const hashed = await bcrypt.hash(password, SALT_ROUNDS);
 
     const user = await User.create({
         username,
         password: hashed,
-        email,
-        zealId,
-        rollNo,
-        section,
-        avatar: avatar ?? null,
+        email: cleanEmail || undefined,
+        zealId: cleanZealId,
+        rollNo: cleanRollNo,
+        section: cleanSection,
+        avatar: avatar || null,
     });
 
     return {

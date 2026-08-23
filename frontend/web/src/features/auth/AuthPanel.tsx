@@ -34,7 +34,6 @@ export function AuthPanel({
          placeholder="Username"
          value={authForm.username}
          onChange={(e) => onAuthFormChange("username", e.target.value)}
-         onKeyDown={(e) => { if (e.key === "Enter") e.preventDefault(); }}
        />
        <input
          className="input"
@@ -42,7 +41,6 @@ export function AuthPanel({
          placeholder="Password"
          value={authForm.password}
          onChange={(e) => onAuthFormChange("password", e.target.value)}
-         onKeyDown={(e) => { if (e.key === "Enter") e.preventDefault(); }}
        />
 
        {authMode === "register" && (
