@@ -10,6 +10,7 @@ export function LobbyPanel({
   currentUserId,
   onStartGame,
   onBack,
+  loadingAction,
 }: {
   roomCode: string;
   hostName: string;
@@ -18,6 +19,7 @@ export function LobbyPanel({
   currentUserId?: string;
   onStartGame: () => void;
   onBack: () => void;
+  loadingAction?: string | null;
 }) {
   return (
     <section className="card lobby-panel">
@@ -38,7 +40,11 @@ export function LobbyPanel({
       </div>
 
       <div className="inline-actions">
-        {hostId === currentUserId && <button className="primary-btn" type="button" onClick={onStartGame}>Start game</button>}
+        {hostId === currentUserId && (
+          <button className="primary-btn" type="button" onClick={onStartGame} disabled={loadingAction === "start-game"}>
+            {loadingAction === "start-game" ? "Starting..." : "Start game"}
+          </button>
+        )}
         <button className="secondary-btn" type="button" onClick={onBack}>Back to rooms</button>
       </div>
     </section>

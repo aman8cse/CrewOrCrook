@@ -7,6 +7,7 @@ import { LobbyPanel } from "@/features/lobby/LobbyPanel";
 import { GamePanel } from "@/features/game/GamePanel";
 import { apiRequest } from "@/lib/api";
 import { createSocket } from "@/lib/socket";
+import { watchPosition, getCurrentPosition } from "@/lib/location";
 import type { ChatMessage, NearbyTarget, PlayerEntry, Position, RoomRecord, UserRecord } from "@/types/game";
 
 type ViewState = "auth" | "dashboard" | "lobby" | "game" | "ended";
@@ -53,6 +54,7 @@ export default function Home() {
   const [chatDraft, setChatDraft] = useState("");
   const [taskProgress, setTaskProgress] = useState({ completed: 0, total: 25 });
   const [winner, setWinner] = useState<string | null>(null);
+  const [loadingAction, setLoadingAction] = useState<string | null>(null);
 
   const setSession = useCallback((nextToken: string | null, nextUser: UserRecord | null) => {
     setToken(nextToken);
@@ -67,14 +69,17 @@ export default function Home() {
   }, []);
 
   const refreshRooms = useCallback(async () => {
-    if (!token) return;
+    if (!token || loadingAction) return;
+    setLoadingAction("refresh");
     try {
       const data = await apiRequest<RoomRecord[]>("/room/available", { token });
       setAvailableRooms(data || []);
     } catch (error) {
       setToast(error instanceof Error ? error.message : "Unable to refresh rooms");
+    } finally {
+      setLoadingAction(null);
     }
-  }, [token]);
+  }, [loadingAction, token]);
 
   const connectSocket = useCallback(
     (jwt: string) => {
@@ -136,6 +141,21 @@ export default function Home() {
       setUser(stored.user);
       setView("dashboard");
       connectSocket(stored.token);
+
+      // start browser geolocation watch and emit initial position
+      getCurrentPosition().then((pos) => {
+        const p = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+        setPlayerPositions((prev) => ({ ...prev, [stored.user.id || stored.user._id]: p }));
+        if (socketRef.current) socketRef.current.emit("game:move", { roomCode: roomCode, position: p });
+      }).catch(() => undefined);
+
+      const stop = watchPosition((pos) => {
+        const p = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+        setPlayerPositions((prev) => ({ ...prev, [stored.user.id || stored.user._id]: p }));
+        if (socketRef.current && roomCode) socketRef.current.emit("game:move", { roomCode, position: p });
+      });
+
+      return () => stop();
     }
   }, [connectSocket]);
 
@@ -152,6 +172,8 @@ export default function Home() {
   }, [toast]);
 
   const handleAuth = async () => {
+    if (loadingAction) return;
+    setLoadingAction("auth");
     try {
       const endpoint = authMode === "login" ? "/auth/login" : "/auth/register";
       const payload = authMode === "login"
@@ -187,23 +209,31 @@ export default function Home() {
       setView("dashboard");
     } catch (error) {
       setToast(error instanceof Error ? error.message : "Authentication failed");
+    } finally {
+      setLoadingAction(null);
     }
   };
 
   const handleLogout = () => {
-    setSession(null, null);
-    setView("auth");
-    setRoomCode("");
-    setPlayers([]);
-    setRole(null);
-    setMeeting(false);
-    setWinner(null);
-    setChat([]);
-    setNearbyTargets([]);
-    setBodies([]);
-    if (socketRef.current) {
-      socketRef.current.disconnect();
-      socketRef.current = null;
+    if (loadingAction) return;
+    setLoadingAction("logout");
+    try {
+      setSession(null, null);
+      setView("auth");
+      setRoomCode("");
+      setPlayers([]);
+      setRole(null);
+      setMeeting(false);
+      setWinner(null);
+      setChat([]);
+      setNearbyTargets([]);
+      setBodies([]);
+      if (socketRef.current) {
+        socketRef.current.disconnect();
+        socketRef.current = null;
+      }
+    } finally {
+      setLoadingAction(null);
     }
   };
 
@@ -213,8 +243,11 @@ export default function Home() {
       setToast("Room code missing");
       return;
     }
+    if (loadingAction) return;
+    setLoadingAction("join-room");
     setRoomCode(target);
     socketRef.current.emit("lobby:join-room", { roomCode: target }, (response: any) => {
+      setLoadingAction(null);
       if (!response?.ok) {
         setToast(response?.message || "Unable to join this room");
         return;
@@ -224,7 +257,8 @@ export default function Home() {
   };
 
   const handleCreateRoom = async () => {
-    if (!token) return;
+    if (!token || loadingAction) return;
+    setLoadingAction("create-room");
     try {
       const data = await apiRequest<{ code: string }>("/room/createNew", {
         method: "POST",
@@ -232,65 +266,84 @@ export default function Home() {
         token,
       });
       setRoomCode(data.code);
+      setLoadingAction(null);
       joinRoom(data.code);
     } catch (error) {
       setToast(error instanceof Error ? error.message : "Could not create room");
+      setLoadingAction(null);
     }
   };
 
   const handleStartGame = () => {
-    if (!roomCode || !socketRef.current) return;
+    if (!roomCode || !socketRef.current || loadingAction) return;
+    setLoadingAction("start-game");
     socketRef.current.emit("game:start", { roomCode }, (response: any) => {
+      setLoadingAction(null);
       if (!response?.ok) setToast(response?.message || "Game could not start");
     });
   };
 
   const handleMove = (position: Position) => {
+    if (loadingAction) return;
+    setLoadingAction("move");
     setPlayerPositions((prev) => ({ ...prev, [user?.id || "me"]: position }));
     if (socketRef.current && roomCode) {
       socketRef.current.emit("game:move", { roomCode, position });
     }
+    setTimeout(() => setLoadingAction(null), 300);
   };
 
   const handleCompleteTask = () => {
-    if (!socketRef.current || !roomCode) return;
+    if (!socketRef.current || !roomCode || loadingAction) return;
+    setLoadingAction("complete-task");
     socketRef.current.emit("game:task-complete", { roomCode }, (response: any) => {
+      setLoadingAction(null);
       if (!response?.ok) setToast(response?.message || "Task could not be completed");
     });
   };
 
   const handleEmergencyMeeting = () => {
-    if (!socketRef.current || !roomCode) return;
+    if (!socketRef.current || !roomCode || loadingAction) return;
+    setLoadingAction("emergency-meeting");
     socketRef.current.emit("game:emergency-meeting", { roomCode }, (response: any) => {
+      setLoadingAction(null);
       if (!response?.ok) setToast(response?.message || "Emergency meeting failed");
     });
   };
 
   const handleReportBody = () => {
-    if (!socketRef.current || !roomCode || bodies.length === 0) return;
+    if (!socketRef.current || !roomCode || bodies.length === 0 || loadingAction) return;
+    setLoadingAction("report-body");
     const body = bodies[0];
     socketRef.current.emit("game:report-body", { roomCode, bodyVictimId: body.victimId }, (response: any) => {
+      setLoadingAction(null);
       if (!response?.ok) setToast(response?.message || "Body could not be reported");
     });
   };
 
   const handleKill = () => {
-    if (!socketRef.current || !roomCode || nearbyTargets.length === 0) return;
+    if (!socketRef.current || !roomCode || nearbyTargets.length === 0 || loadingAction) return;
+    setLoadingAction("kill-target");
     socketRef.current.emit("game:kill", { roomCode, victimId: nearbyTargets[0].userId }, (response: any) => {
+      setLoadingAction(null);
       if (!response?.ok) setToast(response?.message || "Kill failed");
     });
   };
 
   const handleVote = (targetId: string) => {
-    if (!socketRef.current || !roomCode) return;
+    if (!socketRef.current || !roomCode || loadingAction) return;
+    setLoadingAction("vote");
     socketRef.current.emit("game:vote", { roomCode, targetId }, (response: any) => {
+      setLoadingAction(null);
       if (!response?.ok) setToast(response?.message || "Vote failed");
     });
   };
 
   const handleChat = () => {
-    if (!socketRef.current || !roomCode || !chatDraft.trim()) return;
+    if (!socketRef.current || !roomCode || !chatDraft.trim() || loadingAction) return;
+    setLoadingAction("chat");
     socketRef.current.emit("game:chat", { roomCode, message: chatDraft.trim() }, (response: any) => {
+      setLoadingAction(null);
       if (!response?.ok) {
         setToast(response?.message || "Chat failed");
         return;
@@ -333,6 +386,7 @@ export default function Home() {
               authForm={authForm}
               onAuthFormChange={(field, value) => setAuthForm((prev) => ({ ...prev, [field]: value }))}
               onSubmit={handleAuth}
+              loading={loadingAction === "auth"}
             />
           </section>
         ) : (
@@ -346,6 +400,7 @@ export default function Home() {
                 onCreateRoom={handleCreateRoom}
                 onJoinRoom={joinRoom}
                 onLogout={handleLogout}
+                loadingAction={loadingAction}
               />
             )}
 
@@ -358,6 +413,7 @@ export default function Home() {
                 currentUserId={user?.id}
                 onStartGame={handleStartGame}
                 onBack={() => setView("dashboard")}
+                loadingAction={loadingAction}
               />
             )}
 
@@ -384,6 +440,7 @@ export default function Home() {
                 meeting={meeting}
                 playerPositions={playerPositions}
                 bodies={bodies}
+                loadingAction={loadingAction}
               />
             )}
 
