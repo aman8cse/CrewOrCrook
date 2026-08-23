@@ -6,6 +6,7 @@ import { Server } from "socket.io";
 import mongoose from "mongoose";
 import cors from "cors";
 
+import User from "./models/userModel.js";
 import lobbySocketHandler from "./sockets/lobbySocket.js";
 import gameSocketHandler from "./sockets/gameSocket.js";
 import { getGameState, resolveVoting, isTimerExpired, finishGame } from "./services/gameStateService.js";
@@ -22,21 +23,31 @@ const app = express();
 const server = http.createServer(app);
 
 //CORS_CONFIG
-const CLIENT_ORIGIN = "http://localhost:3000";
+const CLIENT_ORIGINS = (process.env.CLIENT_ORIGIN || "http://localhost:3000,http://localhost:3001").split(",").map((origin) => origin.trim()).filter(Boolean);
 
 const io = new Server(server, {
   cors: {
-    origin: "*",
+    origin: (origin, callback) => {
+      if (!origin || CLIENT_ORIGINS.includes(origin)) {
+        callback(null, true);
+        return;
+      }
+      callback(new Error("Origin not allowed by CORS"));
+    },
     credentials: true,
   },
 });
 
-
-
 // middleware
 app.use(
   cors({
-    origin: "*",
+    origin: (origin, callback) => {
+      if (!origin || CLIENT_ORIGINS.includes(origin)) {
+        callback(null, true);
+        return;
+      }
+      callback(new Error("Origin not allowed by CORS"));
+    },
     credentials: true,
   })
 );
@@ -69,13 +80,15 @@ app.use((err, req, res, next) => {
 
 //SOCKET AUTH MIDDLEWARE
 
+const JWT_SECRET = process.env.JWT_SECRET || "crew-or-crook-dev-secret";
+
 io.use((socket, next) => {
   try {
     const token = socket.handshake.auth?.token;
     if (!token) {
       return next(new Error("No token provided"));
     }
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const decoded = jwt.verify(token, JWT_SECRET);
     socket.user = decoded;
     next();
   } catch (err) {
@@ -152,7 +165,21 @@ server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
 
+const ensureUserEmailIndex = async () => {
+  try {
+    await User.deleteMany({ email: { $in: [null, "", undefined] } });
+    await User.collection.dropIndex("email_1").catch(() => undefined);
+    await User.collection.createIndex({ email: 1 }, { unique: true, sparse: true });
+    console.log("User email uniqueness ensured");
+  } catch (err) {
+    console.error("User email index migration failed:", err.message);
+  }
+};
+
 mongoose
   .connect(MONGO_URI)
-  .then(() => console.log("MongoDB connected"))
+  .then(async () => {
+    console.log("MongoDB connected");
+    await ensureUserEmailIndex();
+  })
   .catch((err) => console.error(err.message));

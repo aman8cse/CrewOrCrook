@@ -45,7 +45,6 @@ export function DashboardPanel({
            value={roomCodeInput}
            onChange={(e) => setRoomCodeInput(e.target.value.toUpperCase())}
            style={{ maxWidth: 180 }}
-           onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); onJoinRoom(roomCodeInput); } }}
          />
          <button className="secondary-btn" type="submit" disabled={loadingAction === "join-room"}>
            {loadingAction === "join-room" ? "Joining..." : "Join room"}
