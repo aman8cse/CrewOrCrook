@@ -12,6 +12,7 @@ import {
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { io } from 'socket.io-client';
+import MapView, { Marker } from 'react-native-maps';
 
 const API_BASE = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:5000';
 const SOCKET_URL = process.env.EXPO_PUBLIC_SOCKET_URL || API_BASE;
@@ -50,6 +51,7 @@ export default function App() {
   const [chatDraft, setChatDraft] = useState('');
   const [chatMessages, setChatMessages] = useState([]);
   const [taskProgress, setTaskProgress] = useState({ completed: 0, total: 25 });
+  const [playerPositions, setPlayerPositions] = useState({});
   const [nearbyTargets, setNearbyTargets] = useState([]);
   const [bodies, setBodies] = useState([]);
   const [voteResult, setVoteResult] = useState(null);
@@ -154,6 +156,24 @@ export default function App() {
         setUser(parsed.user);
         setScreen('dashboard');
         connectSocket(parsed.token);
+      }
+
+      // request permission and start location watch
+      try {
+        const { status } = await (await import('expo-location')).requestForegroundPermissionsAsync();
+        if (status === 'granted') {
+          const Location = await import('expo-location');
+          const watcher = await Location.watchPositionAsync({ accuracy: Location.Accuracy.Highest, timeInterval: 2000, distanceInterval: 2 }, (loc) => {
+            const p = { lat: loc.coords.latitude, lng: loc.coords.longitude };
+            setPlayerPositions((prev) => ({ ...(prev || {}), [parsed?.user?.id || parsed?.user?._id || 'me']: p }));
+            if (socketRef.current && roomCode) socketRef.current.emit('game:move', { roomCode, position: p });
+          });
+
+          // store watcher to be able to remove later
+          (globalThis as any).__crew_location_watcher = watcher;
+        }
+      } catch (e) {
+        // ignore
       }
     };
     bootstrap();
@@ -461,6 +481,28 @@ export default function App() {
         <Text style={styles.title}>Mission room</Text>
         <View style={[styles.roleBadge, role === 'imposter' ? styles.imposterBadge : styles.crewmateBadge]}>
           <Text style={styles.roleBadgeText}>{role || 'Crewmate'}</Text>
+        </View>
+      </View>
+
+      <View style={styles.card}>
+        <Text style={styles.cardTitle}>Map</Text>
+        <View style={{ height: 220, borderRadius: 12, overflow: 'hidden' }}>
+          <MapView
+            style={{ flex: 1 }}
+            initialRegion={{
+              latitude: (playerPositions[currentUserId]?.lat) || presetPositions[0].lat,
+              longitude: (playerPositions[currentUserId]?.lng) || presetPositions[0].lng,
+              latitudeDelta: 0.003,
+              longitudeDelta: 0.003,
+            }}
+          >
+            {Object.entries(playerPositions || {}).map(([id, pos]) => (
+              <Marker key={id} coordinate={{ latitude: pos.lat, longitude: pos.lng }} />
+            ))}
+            {bodies.map((b, i) => (
+              <Marker key={`body-${i}`} coordinate={{ latitude: b.lat, longitude: b.lng }} />
+            ))}
+          </MapView>
         </View>
       </View>
 

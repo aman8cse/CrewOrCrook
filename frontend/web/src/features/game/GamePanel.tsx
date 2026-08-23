@@ -1,5 +1,6 @@
-"use client";
+﻿"use client";
 
+import React, { useEffect, useRef } from "react";
 import type { ChatMessage, NearbyTarget, PlayerEntry, Position } from "@/types/game";
 
 export function GamePanel({
@@ -48,6 +49,81 @@ export function GamePanel({
   bodies: Array<{ victimId: string; lat: number; lng: number }>;
 }) {
   const relevantPlayers = players.filter((p) => p.userId !== currentUserId && p.isConnected);
+  const mapRef = useRef<HTMLDivElement | null>(null);
+  const mapInstance = useRef<any>(null);
+  const markersLayer = useRef<any>(null);
+
+  const selfPos = playerPositions[currentUserId || ""] || { lat: 28.6139, lng: 77.209 };
+
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      if (!mapRef.current) return;
+      const L = (await import('leaflet')) as any;
+      await import('leaflet/dist/leaflet.css');
+
+      if (!mounted) return;
+
+      if (!mapInstance.current) {
+        const map = L.map(mapRef.current).setView([selfPos.lat, selfPos.lng], 17);
+        L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+          attribution: '&copy; OpenStreetMap contributors',
+        }).addTo(map);
+
+        const layer = L.layerGroup().addTo(map);
+        mapInstance.current = map;
+        markersLayer.current = layer;
+      }
+
+      if (mapInstance.current) {
+        mapInstance.current.setView([selfPos.lat, selfPos.lng]);
+      }
+
+      if (markersLayer.current) {
+        markersLayer.current.clearLayers();
+
+        players.forEach((player) => {
+          const pos = playerPositions[player.userId] || selfPos;
+          const marker = L.marker([pos.lat, pos.lng], { title: player.username || 'Player' });
+          marker.bindPopup(`${player.username || 'Player'}`);
+          markersLayer.current.addLayer(marker);
+        });
+
+        bodies.forEach((b, i) => {
+          const m = L.marker([b.lat, b.lng], { title: 'Reported body' });
+          m.bindPopup('Reported body');
+          markersLayer.current.addLayer(m);
+        });
+      }
+    })();
+
+    return () => { mounted = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [players, playerPositions, bodies, currentUserId]);
+
+  const renderNearby = () => {
+    if (!nearbyTargets || nearbyTargets.length === 0) return (<p style={{ color: 'var(--muted)' }}>No valid targets nearby.</p>);
+    return (
+      <div className="activity-list">
+        {nearbyTargets.map((target) => (
+          <div key={target.userId} className="activity-card">
+            <strong>{target.userId}</strong>
+            <p style={{ color: 'var(--muted)', marginTop: 6 }}>{target.distance}m away</p>
+          </div>
+        ))}
+      </div>
+    );
+  };
+
+  const renderChat = () => {
+    if (!chat || chat.length === 0) return (<p style={{ color: 'var(--muted)' }}>No messages yet.</p>);
+    return chat.map((msg, i) => (
+      <div className="chat-bubble" key={(msg.userId || 'u') + '-' + (msg.ts || i)}>
+        <div className="chat-meta">{msg.userId}</div>
+        <div>{msg.message}</div>
+      </div>
+    ));
+  };
 
   return (
     <section className="card game-panel">
@@ -60,41 +136,12 @@ export function GamePanel({
 
       <div className="game-layout">
         <div>
-          <div className="map-grid">
-            {players.map((player) => {
-              const pos = playerPositions[player.userId] || { lat: 28.6139, lng: 77.209 };
-              const x = ((pos.lng - 77.2084) / 0.0013) * 100;
-              const y = ((28.6147 - pos.lat) / 0.0022) * 100;
-              return (
-                <div
-                  key={player.userId}
-                  className="map-player"
-                  title={player.username || "Unknown"}
-                  style={{
-                    left: `${Math.max(8, Math.min(92, x))}%`,
-                    top: `${Math.max(8, Math.min(92, y))}%`,
-                    background: player.userId === currentUserId ? "#47d8ff" : player.userId === hostId ? "#ffc857" : "#7c5cff",
-                  }}
-                />
-              );
-            })}
-
-            {bodies.map((body, index) => (
-              <div
-                key={`${body.victimId}-${index}`}
-                className="map-body"
-                style={{
-                  left: `${Math.max(8, Math.min(92, ((body.lng - 77.2084) / 0.0013) * 100))}%`,
-                  top: `${Math.max(8, Math.min(92, ((28.6147 - body.lat) / 0.0022) * 100))}%`,
-                }}
-              />
-            ))}
+          <div style={{ height: 420, borderRadius: 12, overflow: 'hidden' }}>
+            <div ref={mapRef} style={{ height: '100%', width: '100%' }} />
           </div>
 
           <div className="inline-actions" style={{ marginTop: 18, flexWrap: "wrap" }}>
-            {[{ lat: 28.6139, lng: 77.209 }, { lat: 28.6141, lng: 77.2091 }, { lat: 28.6138, lng: 77.2095 }, { lat: 28.6132, lng: 77.2092 }].map((pos, index) => (
-              <button key={`${pos.lat}-${pos.lng}`} className="ghost-btn" type="button" onClick={() => onMove(pos)}>Move {index + 1}</button>
-            ))}
+            <button className="ghost-btn" type="button" onClick={() => onMove(selfPos)}>Update position</button>
             {role === "imposter" && <button className="danger-btn" type="button" onClick={onKill}>Kill closest target</button>}
             <button className="secondary-btn" type="button" onClick={onEmergencyMeeting}>Emergency meeting</button>
             <button className="secondary-btn" type="button" onClick={onReportBody}>Report body</button>
@@ -123,34 +170,16 @@ export function GamePanel({
             <div className="section-header">
               <h3>Nearby targets</h3>
             </div>
-            {nearbyTargets.length === 0 ? (
-              <p style={{ color: "var(--muted)" }}>No valid targets nearby.</p>
-            ) : (
-              <div className="activity-list">
-                {nearbyTargets.map((target) => (
-                  <div key={target.userId} className="activity-card">
-                    <strong>{target.userId}</strong>
-                    <p style={{ color: "var(--muted)", marginTop: 6 }}>{target.distance}m away</p>
-                  </div>
-                ))}
-              </div>
-            )}
+            {renderNearby()}
           </div>
 
           <div className="card" style={{ padding: 16 }}>
             <div className="section-header">
               <h3>Chat</h3>
             </div>
-            <div className="chat-box">
-              {chat.length === 0 ? <p style={{ color: "var(--muted)" }}>No messages yet.</p> : chat.map((msg, i) => (
-                <div className="chat-bubble" key={`${msg.userId}-${msg.ts}-${i}`}>
-                  <div className="chat-meta">{msg.userId}</div>
-                  <div>{msg.message}</div>
-                </div>
-              ))}
-            </div>
+            <div className="chat-box">{renderChat()}</div>
             <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
-              <input className="input" value={chatDraft} onChange={(e) => setChatDraft(e.target.value)} placeholder="Say something..." />
+              <input className="input" value={chatDraft} onChange={(e) => setChatDraft((e as any).target.value)} placeholder="Say something..." />
               <button className="primary-btn" type="button" onClick={onSendChat}>Send</button>
             </div>
           </div>
