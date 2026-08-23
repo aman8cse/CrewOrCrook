@@ -25,6 +25,7 @@ export function GamePanel({
   meeting,
   playerPositions,
   bodies,
+  loadingAction,
 }: {
   role: string | null;
   roomCode: string;
@@ -47,11 +48,13 @@ export function GamePanel({
   meeting: boolean;
   playerPositions: Record<string, Position>;
   bodies: Array<{ victimId: string; lat: number; lng: number }>;
+  loadingAction?: string | null;
 }) {
   const relevantPlayers = players.filter((p) => p.userId !== currentUserId && p.isConnected);
   const mapRef = useRef<HTMLDivElement | null>(null);
   const mapInstance = useRef<any>(null);
   const markersLayer = useRef<any>(null);
+  const isBusy = !!loadingAction;
 
   const selfPos = playerPositions[currentUserId || ""] || { lat: 28.6139, lng: 77.209 };
 
@@ -141,11 +144,23 @@ export function GamePanel({
           </div>
 
           <div className="inline-actions" style={{ marginTop: 18, flexWrap: "wrap" }}>
-            <button className="ghost-btn" type="button" onClick={() => onMove(selfPos)}>Update position</button>
-            {role === "imposter" && <button className="danger-btn" type="button" onClick={onKill}>Kill closest target</button>}
-            <button className="secondary-btn" type="button" onClick={onEmergencyMeeting}>Emergency meeting</button>
-            <button className="secondary-btn" type="button" onClick={onReportBody}>Report body</button>
-            <button className="primary-btn" type="button" onClick={onCompleteTask}>Complete task</button>
+            <button className="ghost-btn" type="button" onClick={() => onMove(selfPos)} disabled={loadingAction === "move" || isBusy}>
+              {loadingAction === "move" ? "Updating..." : "Update position"}
+            </button>
+            {role === "imposter" && (
+              <button className="danger-btn" type="button" onClick={onKill} disabled={loadingAction === "kill-target" || isBusy}>
+                {loadingAction === "kill-target" ? "Killing..." : "Kill closest target"}
+              </button>
+            )}
+            <button className="secondary-btn" type="button" onClick={onEmergencyMeeting} disabled={loadingAction === "emergency-meeting" || isBusy}>
+              {loadingAction === "emergency-meeting" ? "Calling..." : "Emergency meeting"}
+            </button>
+            <button className="secondary-btn" type="button" onClick={onReportBody} disabled={loadingAction === "report-body" || isBusy}>
+              {loadingAction === "report-body" ? "Reporting..." : "Report body"}
+            </button>
+            <button className="primary-btn" type="button" onClick={onCompleteTask} disabled={loadingAction === "complete-task" || isBusy}>
+              {loadingAction === "complete-task" ? "Completing..." : "Complete task"}
+            </button>
           </div>
         </div>
 
@@ -179,8 +194,21 @@ export function GamePanel({
             </div>
             <div className="chat-box">{renderChat()}</div>
             <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
-              <input className="input" value={chatDraft} onChange={(e) => setChatDraft((e as any).target.value)} placeholder="Say something..." />
-              <button className="primary-btn" type="button" onClick={onSendChat}>Send</button>
+              <input
+                className="input"
+                value={chatDraft}
+                onChange={(e) => setChatDraft((e as any).target.value)}
+                placeholder="Say something..."
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    onSendChat();
+                  }
+                }}
+              />
+              <button className="primary-btn" type="button" onClick={onSendChat} disabled={loadingAction === "chat" || isBusy}>
+                {loadingAction === "chat" ? "Sending..." : "Send"}
+              </button>
             </div>
           </div>
         </aside>
@@ -193,8 +221,14 @@ export function GamePanel({
           </div>
           <div className="inline-actions">
             {relevantPlayers.map((player) => (
-              <button key={player.userId} className="secondary-btn" type="button" onClick={() => onVote(player.userId)}>
-                Vote {player.username || "Player"}
+              <button
+                key={player.userId}
+                className="secondary-btn"
+                type="button"
+                onClick={() => onVote(player.userId)}
+                disabled={loadingAction === "vote" || isBusy}
+              >
+                {loadingAction === "vote" ? "Voting..." : `Vote ${player.username || "Player"}`}
               </button>
             ))}
           </div>
