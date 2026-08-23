@@ -79,7 +79,7 @@ export default function Home() {
     } finally {
       setLoadingAction(null);
     }
-  }, [loadingAction, token]);
+  }, [token]);
 
   const connectSocket = useCallback(
     (jwt: string) => {
@@ -163,7 +163,7 @@ export default function Home() {
     if (!token) return;
     connectSocket(token);
     void refreshRooms();
-  }, [token, connectSocket, refreshRooms]);
+  }, [token, connectSocket]);
 
   useEffect(() => {
     if (!toast) return;
