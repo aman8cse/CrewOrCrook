@@ -12,6 +12,7 @@ import {
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { io } from 'socket.io-client';
+import MapView, { Marker } from 'react-native-maps';
 
 const API_BASE = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:5000';
 const SOCKET_URL = process.env.EXPO_PUBLIC_SOCKET_URL || API_BASE;
@@ -50,9 +51,11 @@ export default function App() {
   const [chatDraft, setChatDraft] = useState('');
   const [chatMessages, setChatMessages] = useState([]);
   const [taskProgress, setTaskProgress] = useState({ completed: 0, total: 25 });
+  const [playerPositions, setPlayerPositions] = useState({});
   const [nearbyTargets, setNearbyTargets] = useState([]);
   const [bodies, setBodies] = useState([]);
   const [voteResult, setVoteResult] = useState(null);
+  const [loadingAction, setLoadingAction] = useState(null);
 
   const currentUserId = user?._id || user?.id;
 
@@ -155,6 +158,24 @@ export default function App() {
         setScreen('dashboard');
         connectSocket(parsed.token);
       }
+
+      // request permission and start location watch
+      try {
+        const { status } = await (await import('expo-location')).requestForegroundPermissionsAsync();
+        if (status === 'granted') {
+          const Location = await import('expo-location');
+          const watcher = await Location.watchPositionAsync({ accuracy: Location.Accuracy.Highest, timeInterval: 2000, distanceInterval: 2 }, (loc) => {
+            const p = { lat: loc.coords.latitude, lng: loc.coords.longitude };
+            setPlayerPositions((prev) => ({ ...(prev || {}), [parsed?.user?.id || parsed?.user?._id || 'me']: p }));
+            if (socketRef.current && roomCode) socketRef.current.emit('game:move', { roomCode, position: p });
+          });
+
+          // store watcher to be able to remove later
+          globalThis.__crew_location_watcher = watcher;
+        }
+      } catch (e) {
+        // ignore
+      }
     };
     bootstrap();
   }, [connectSocket]);
@@ -174,6 +195,8 @@ export default function App() {
   }, [connectSocket, request, token]);
 
   const handleAuth = async () => {
+    if (loadingAction) return;
+    setLoadingAction('auth');
     try {
       const endpoint = authMode === 'login' ? '/auth/login' : '/auth/register';
       const payload = authMode === 'login'
@@ -207,26 +230,34 @@ export default function App() {
       Alert.alert('Welcome', `Signed in as ${normalizedUser.username}`);
     } catch (err) {
       Alert.alert('Auth error', err.message);
+    } finally {
+      setLoadingAction(null);
     }
   };
 
   const refreshRooms = async () => {
+    if (loadingAction) return;
+    setLoadingAction('refresh');
     try {
       const data = await request('/room/available');
       setAvailableRooms(data || []);
     } catch (err) {
       Alert.alert('Refresh error', err.message);
+    } finally {
+      setLoadingAction(null);
     }
   };
 
   const joinRoom = (code) => {
     const target = code.trim();
-    if (!target || !socketRef.current) {
-      Alert.alert('Room error', 'Missing room code');
+    if (!target || !socketRef.current || loadingAction) {
+      if (!target || !socketRef.current) Alert.alert('Room error', 'Missing room code');
       return;
     }
+    setLoadingAction('join-room');
     setRoomCode(target);
     socketRef.current.emit('lobby:join-room', { roomCode: target }, (response) => {
+      setLoadingAction(null);
       if (!response?.ok) {
         Alert.alert('Join failed', response?.message || 'Could not join room');
         return;
@@ -236,18 +267,24 @@ export default function App() {
   };
 
   const createRoom = async () => {
+    if (loadingAction) return;
+    setLoadingAction('create-room');
     try {
       const data = await request('/room/createNew', { method: 'POST', body: JSON.stringify({}) });
       setRoomCode(data.code);
+      setLoadingAction(null);
       joinRoom(data.code);
     } catch (err) {
       Alert.alert('Create room error', err.message);
+      setLoadingAction(null);
     }
   };
 
   const startGame = () => {
-    if (!socketRef.current || !roomCode) return;
+    if (!socketRef.current || !roomCode || loadingAction) return;
+    setLoadingAction('start-game');
     socketRef.current.emit('game:start', { roomCode }, (response) => {
+      setLoadingAction(null);
       if (!response?.ok) {
         Alert.alert('Start failed', response?.message || 'Could not start match');
       }
@@ -256,12 +293,16 @@ export default function App() {
 
   const sendMove = (position) => {
     if (!socketRef.current || !roomCode) return;
+    setLoadingAction('move');
     socketRef.current.emit('game:move', { roomCode, position });
+    setTimeout(() => setLoadingAction(null), 250);
   };
 
   const completeTask = () => {
-    if (!socketRef.current || !roomCode) return;
+    if (!socketRef.current || !roomCode || loadingAction) return;
+    setLoadingAction('complete-task');
     socketRef.current.emit('game:task-complete', { roomCode }, (response) => {
+      setLoadingAction(null);
       if (!response?.ok) {
         Alert.alert('Task error', response?.message || 'Task failed');
       }
@@ -269,9 +310,11 @@ export default function App() {
   };
 
   const reportBody = () => {
-    if (!socketRef.current || !roomCode || bodies.length === 0) return;
+    if (!socketRef.current || !roomCode || bodies.length === 0 || loadingAction) return;
+    setLoadingAction('report-body');
     const body = bodies[0];
     socketRef.current.emit('game:report-body', { roomCode, bodyVictimId: body.victimId }, (response) => {
+      setLoadingAction(null);
       if (!response?.ok) {
         Alert.alert('Report failed', response?.message || 'Body could not be reported');
       }
@@ -279,8 +322,10 @@ export default function App() {
   };
 
   const emergencyMeeting = () => {
-    if (!socketRef.current || !roomCode) return;
+    if (!socketRef.current || !roomCode || loadingAction) return;
+    setLoadingAction('emergency-meeting');
     socketRef.current.emit('game:emergency-meeting', { roomCode }, (response) => {
+      setLoadingAction(null);
       if (!response?.ok) {
         Alert.alert('Meeting failed', response?.message || 'Could not start emergency meeting');
       }
@@ -288,8 +333,10 @@ export default function App() {
   };
 
   const killClosestTarget = () => {
-    if (!socketRef.current || !roomCode || nearbyTargets.length === 0) return;
+    if (!socketRef.current || !roomCode || nearbyTargets.length === 0 || loadingAction) return;
+    setLoadingAction('kill-target');
     socketRef.current.emit('game:kill', { roomCode, victimId: nearbyTargets[0].userId }, (response) => {
+      setLoadingAction(null);
       if (!response?.ok) {
         Alert.alert('Kill failed', response?.message || 'Kill could not be executed');
       }
@@ -297,8 +344,10 @@ export default function App() {
   };
 
   const sendVote = (targetId) => {
-    if (!socketRef.current || !roomCode) return;
+    if (!socketRef.current || !roomCode || loadingAction) return;
+    setLoadingAction('vote');
     socketRef.current.emit('game:vote', { roomCode, targetId }, (response) => {
+      setLoadingAction(null);
       if (!response?.ok) {
         Alert.alert('Vote failed', response?.message || 'Could not vote');
       }
@@ -306,8 +355,10 @@ export default function App() {
   };
 
   const sendChat = () => {
-    if (!chatDraft.trim() || !socketRef.current || !roomCode) return;
+    if (!chatDraft.trim() || !socketRef.current || !roomCode || loadingAction) return;
+    setLoadingAction('chat');
     socketRef.current.emit('game:chat', { roomCode, message: chatDraft.trim() }, (response) => {
+      setLoadingAction(null);
       if (!response?.ok) {
         Alert.alert('Chat error', response?.message || 'Could not send chat');
       }
@@ -316,20 +367,26 @@ export default function App() {
   };
 
   const logout = async () => {
-    if (socketRef.current) {
-      socketRef.current.disconnect();
-      socketRef.current = null;
+    if (loadingAction) return;
+    setLoadingAction('logout');
+    try {
+      if (socketRef.current) {
+        socketRef.current.disconnect();
+        socketRef.current = null;
+      }
+      await persistSession(null, null);
+      setScreen('auth');
+      setRole(null);
+      setWinner(null);
+      setMeeting(false);
+      setPlayers([]);
+      setAvailableRooms([]);
+      setChatMessages([]);
+      setNearbyTargets([]);
+      setBodies([]);
+    } finally {
+      setLoadingAction(null);
     }
-    await persistSession(null, null);
-    setScreen('auth');
-    setRole(null);
-    setWinner(null);
-    setMeeting(false);
-    setPlayers([]);
-    setAvailableRooms([]);
-    setChatMessages([]);
-    setNearbyTargets([]);
-    setBodies([]);
   };
 
   const relevantVoteTargets = players.filter((player) => player.userId !== currentUserId && player.isConnected);
@@ -354,8 +411,27 @@ export default function App() {
           </TouchableOpacity>
         </View>
 
-        <TextInput style={styles.input} value={authForm.username} placeholder="Username" placeholderTextColor="#aab7c7" onChangeText={(text) => setAuthForm((prev) => ({ ...prev, username: text }))} />
-        <TextInput style={styles.input} value={authForm.password} placeholder="Password" placeholderTextColor="#aab7c7" secureTextEntry onChangeText={(text) => setAuthForm((prev) => ({ ...prev, password: text }))} />
+        <TextInput
+          style={styles.input}
+          value={authForm.username}
+          placeholder="Username"
+          placeholderTextColor="#aab7c7"
+          returnKeyType="next"
+          onSubmitEditing={() => { /* no-op, field is focused manually */ }}
+          onChangeText={(text) => setAuthForm((prev) => ({ ...prev, username: text }))}
+        />
+        <TextInput
+          style={styles.input}
+          value={authForm.password}
+          placeholder="Password"
+          placeholderTextColor="#aab7c7"
+          secureTextEntry
+          returnKeyType={authMode === 'login' ? 'done' : 'next'}
+          onSubmitEditing={() => {
+            if (authMode === 'login') handleAuth();
+          }}
+          onChangeText={(text) => setAuthForm((prev) => ({ ...prev, password: text }))}
+        />
 
         {authMode === 'register' && (
           <>
@@ -367,8 +443,8 @@ export default function App() {
           </>
         )}
 
-        <TouchableOpacity style={styles.primaryButton} onPress={handleAuth}>
-          <Text style={styles.primaryButtonText}>{authMode === 'login' ? 'Enter the game' : 'Create account'}</Text>
+        <TouchableOpacity style={[styles.primaryButton, loadingAction === 'auth' && styles.disabledButton]} onPress={handleAuth} disabled={loadingAction === 'auth'}>
+          <Text style={styles.primaryButtonText}>{loadingAction === 'auth' ? 'Working...' : authMode === 'login' ? 'Enter the game' : 'Create account'}</Text>
         </TouchableOpacity>
       </View>
     </ScrollView>
@@ -378,14 +454,14 @@ export default function App() {
     <ScrollView contentContainerStyle={styles.pagePad}>
       <View style={styles.topRow}>
         <Text style={styles.title}>Game lobby</Text>
-        <TouchableOpacity style={styles.secondaryButton} onPress={refreshRooms}>
-          <Text style={styles.secondaryButtonText}>Refresh</Text>
+        <TouchableOpacity style={[styles.secondaryButton, loadingAction === 'refresh' && styles.disabledButton]} onPress={refreshRooms} disabled={loadingAction === 'refresh'}>
+          <Text style={styles.secondaryButtonText}>{loadingAction === 'refresh' ? 'Loading...' : 'Refresh'}</Text>
         </TouchableOpacity>
       </View>
 
       <View style={styles.rowActions}>
-        <TouchableOpacity style={styles.primaryButton} onPress={createRoom}>
-          <Text style={styles.primaryButtonText}>Create room</Text>
+        <TouchableOpacity style={[styles.primaryButton, loadingAction === 'create-room' && styles.disabledButton]} onPress={createRoom} disabled={loadingAction === 'create-room'}>
+          <Text style={styles.primaryButtonText}>{loadingAction === 'create-room' ? 'Creating...' : 'Create room'}</Text>
         </TouchableOpacity>
         <TextInput
           style={[styles.input, { flex: 1, minWidth: 120 }]}
@@ -393,10 +469,12 @@ export default function App() {
           placeholder="Room code"
           placeholderTextColor="#aab7c7"
           autoCapitalize="characters"
+          returnKeyType="done"
+          onSubmitEditing={() => joinRoom(roomCodeInput)}
           onChangeText={setRoomCodeInput}
         />
-        <TouchableOpacity style={styles.secondaryButton} onPress={() => joinRoom(roomCodeInput)}>
-          <Text style={styles.secondaryButtonText}>Join</Text>
+        <TouchableOpacity style={[styles.secondaryButton, loadingAction === 'join-room' && styles.disabledButton]} onPress={() => joinRoom(roomCodeInput)} disabled={loadingAction === 'join-room'}>
+          <Text style={styles.secondaryButtonText}>{loadingAction === 'join-room' ? 'Joining...' : 'Join'}</Text>
         </TouchableOpacity>
       </View>
 
@@ -419,8 +497,8 @@ export default function App() {
         )}
       </View>
 
-      <TouchableOpacity style={styles.dangerButton} onPress={logout}>
-        <Text style={styles.dangerButtonText}>Log out</Text>
+      <TouchableOpacity style={[styles.dangerButton, loadingAction === 'logout' && styles.disabledButton]} onPress={logout} disabled={loadingAction === 'logout'}>
+        <Text style={styles.dangerButtonText}>{loadingAction === 'logout' ? 'Logging out...' : 'Log out'}</Text>
       </TouchableOpacity>
     </ScrollView>
   );
@@ -444,8 +522,8 @@ export default function App() {
 
       <View style={styles.rowActions}>
         {hostId === currentUserId && (
-          <TouchableOpacity style={styles.primaryButton} onPress={startGame}>
-            <Text style={styles.primaryButtonText}>Start game</Text>
+          <TouchableOpacity style={[styles.primaryButton, loadingAction === 'start-game' && styles.disabledButton]} onPress={startGame} disabled={loadingAction === 'start-game'}>
+            <Text style={styles.primaryButtonText}>{loadingAction === 'start-game' ? 'Starting...' : 'Start game'}</Text>
           </TouchableOpacity>
         )}
         <TouchableOpacity style={styles.secondaryButton} onPress={() => setScreen('dashboard')}>
@@ -465,6 +543,28 @@ export default function App() {
       </View>
 
       <View style={styles.card}>
+        <Text style={styles.cardTitle}>Map</Text>
+        <View style={{ height: 220, borderRadius: 12, overflow: 'hidden' }}>
+          <MapView
+            style={{ flex: 1 }}
+            initialRegion={{
+              latitude: (playerPositions[currentUserId]?.lat) || presetPositions[0].lat,
+              longitude: (playerPositions[currentUserId]?.lng) || presetPositions[0].lng,
+              latitudeDelta: 0.003,
+              longitudeDelta: 0.003,
+            }}
+          >
+            {Object.entries(playerPositions || {}).map(([id, pos]) => (
+              <Marker key={id} coordinate={{ latitude: pos.lat, longitude: pos.lng }} />
+            ))}
+            {bodies.map((b, i) => (
+              <Marker key={`body-${i}`} coordinate={{ latitude: b.lat, longitude: b.lng }} />
+            ))}
+          </MapView>
+        </View>
+      </View>
+
+      <View style={styles.card}>
         <Text style={styles.cardTitle}>Movement</Text>
         <View style={styles.buttonWrap}>
           {presetPositions.map((position, index) => (
@@ -475,18 +575,18 @@ export default function App() {
         </View>
         <View style={styles.buttonWrap}>
           {role === 'imposter' && (
-            <TouchableOpacity style={styles.dangerButton} onPress={killClosestTarget}>
-              <Text style={styles.dangerButtonText}>Kill nearest target</Text>
+            <TouchableOpacity style={[styles.dangerButton, loadingAction === 'kill-target' && styles.disabledButton]} onPress={killClosestTarget} disabled={loadingAction === 'kill-target'}>
+              <Text style={styles.dangerButtonText}>{loadingAction === 'kill-target' ? 'Killing...' : 'Kill nearest target'}</Text>
             </TouchableOpacity>
           )}
-          <TouchableOpacity style={styles.secondaryButton} onPress={emergencyMeeting}>
-            <Text style={styles.secondaryButtonText}>Emergency meeting</Text>
+          <TouchableOpacity style={[styles.secondaryButton, loadingAction === 'emergency-meeting' && styles.disabledButton]} onPress={emergencyMeeting} disabled={loadingAction === 'emergency-meeting'}>
+            <Text style={styles.secondaryButtonText}>{loadingAction === 'emergency-meeting' ? 'Calling...' : 'Emergency meeting'}</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.secondaryButton} onPress={reportBody}>
-            <Text style={styles.secondaryButtonText}>Report body</Text>
+          <TouchableOpacity style={[styles.secondaryButton, loadingAction === 'report-body' && styles.disabledButton]} onPress={reportBody} disabled={loadingAction === 'report-body'}>
+            <Text style={styles.secondaryButtonText}>{loadingAction === 'report-body' ? 'Reporting...' : 'Report body'}</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.primaryButton} onPress={completeTask}>
-            <Text style={styles.primaryButtonText}>Complete task</Text>
+          <TouchableOpacity style={[styles.primaryButton, loadingAction === 'complete-task' && styles.disabledButton]} onPress={completeTask} disabled={loadingAction === 'complete-task'}>
+            <Text style={styles.primaryButtonText}>{loadingAction === 'complete-task' ? 'Working...' : 'Complete task'}</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -523,9 +623,17 @@ export default function App() {
           ))
         )}
         <View style={styles.rowActions}>
-          <TextInput style={[styles.input, { flex: 1 }]} value={chatDraft} placeholder="Say something..." placeholderTextColor="#aab7c7" onChangeText={setChatDraft} />
-          <TouchableOpacity style={styles.primaryButton} onPress={sendChat}>
-            <Text style={styles.primaryButtonText}>Send</Text>
+          <TextInput
+            style={[styles.input, { flex: 1 }]}
+            value={chatDraft}
+            placeholder="Say something..."
+            placeholderTextColor="#aab7c7"
+            returnKeyType="send"
+            onSubmitEditing={sendChat}
+            onChangeText={setChatDraft}
+          />
+          <TouchableOpacity style={[styles.primaryButton, loadingAction === 'chat' && styles.disabledButton]} onPress={sendChat} disabled={loadingAction === 'chat'}>
+            <Text style={styles.primaryButtonText}>{loadingAction === 'chat' ? 'Sending...' : 'Send'}</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -534,8 +642,8 @@ export default function App() {
         <View style={styles.card}>
           <Text style={styles.cardTitle}>Vote</Text>
           {relevantVoteTargets.map((player) => (
-            <TouchableOpacity key={player.userId} style={styles.secondaryButton} onPress={() => sendVote(player.userId)}>
-              <Text style={styles.secondaryButtonText}>Vote {player.username || 'Player'}</Text>
+            <TouchableOpacity key={player.userId} style={[styles.secondaryButton, loadingAction === 'vote' && styles.disabledButton]} onPress={() => sendVote(player.userId)} disabled={loadingAction === 'vote'}>
+              <Text style={styles.secondaryButtonText}>{loadingAction === 'vote' ? 'Voting...' : `Vote ${player.username || 'Player'}`}</Text>
             </TouchableOpacity>
           ))}
           {voteResult && <Text style={styles.warningText}>{voteResult}</Text>}
@@ -663,6 +771,9 @@ const styles = StyleSheet.create({
   secondaryButtonText: {
     color: '#edf7ff',
     fontWeight: '700',
+  },
+  disabledButton: {
+    opacity: 0.65,
   },
   dangerButton: {
     backgroundColor: 'rgba(255,90,118,0.15)',
