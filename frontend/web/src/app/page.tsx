@@ -141,23 +141,25 @@ export default function Home() {
       setUser(stored.user);
       setView("dashboard");
       connectSocket(stored.token);
-
-      // start browser geolocation watch and emit initial position
-      getCurrentPosition().then((pos) => {
-        const p = { lat: pos.coords.latitude, lng: pos.coords.longitude };
-        setPlayerPositions((prev) => ({ ...prev, [stored.user.id || stored.user._id]: p }));
-        if (socketRef.current) socketRef.current.emit("game:move", { roomCode: roomCode, position: p });
-      }).catch(() => undefined);
-
-      const stop = watchPosition((pos) => {
-        const p = { lat: pos.coords.latitude, lng: pos.coords.longitude };
-        setPlayerPositions((prev) => ({ ...prev, [stored.user.id || stored.user._id]: p }));
-        if (socketRef.current && roomCode) socketRef.current.emit("game:move", { roomCode, position: p });
-      });
-
-      return () => stop();
     }
   }, [connectSocket]);
+
+  useEffect(() => {
+    if (!token || !user) return;
+
+    const userId = String(user.id || user._id || "me");
+    const syncPosition = (pos: GeolocationPosition) => {
+      const nextPosition = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+      setPlayerPositions((prev) => ({ ...prev, [userId]: nextPosition }));
+      if (socketRef.current && roomCode) {
+        socketRef.current.emit("game:move", { roomCode, position: nextPosition });
+      }
+    };
+
+    getCurrentPosition().then(syncPosition).catch(() => undefined);
+    const stop = watchPosition(syncPosition);
+    return () => stop();
+  }, [token, user, roomCode]);
 
   useEffect(() => {
     if (!token) return;
