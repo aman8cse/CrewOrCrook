@@ -67,9 +67,19 @@ export function GamePanel({
 
       if (!mounted) return;
 
+      if (!L.Icon.Default) {
+        return;
+      }
+
+      L.Icon.Default.mergeOptions({
+        iconRetinaUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png',
+        iconUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
+        shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
+      });
+
       if (!mapInstance.current) {
         const map = L.map(mapRef.current).setView([selfPos.lat, selfPos.lng], 17);
-        L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
           attribution: '&copy; OpenStreetMap contributors',
         }).addTo(map);
 
@@ -85,15 +95,26 @@ export function GamePanel({
       if (markersLayer.current) {
         markersLayer.current.clearLayers();
 
+        const customMarker = (color: string) => L.divIcon({
+          className: 'crew-marker',
+          html: `<span style="display:block;width:14px;height:14px;border-radius:999px;background:${color};border:2px solid white;box-shadow:0 0 0 2px rgba(0,0,0,0.22);"></span>`,
+          iconSize: [14, 14],
+          iconAnchor: [7, 7],
+          popupAnchor: [0, -8],
+        });
+
         players.forEach((player) => {
           const pos = playerPositions[player.userId] || selfPos;
-          const marker = L.marker([pos.lat, pos.lng], { title: player.username || 'Player' });
+          const marker = L.marker([pos.lat, pos.lng], {
+            title: player.username || 'Player',
+            icon: customMarker(player.userId === currentUserId ? '#47d8ff' : '#7c5cff'),
+          });
           marker.bindPopup(`${player.username || 'Player'}`);
           markersLayer.current.addLayer(marker);
         });
 
-        bodies.forEach((b, i) => {
-          const m = L.marker([b.lat, b.lng], { title: 'Reported body' });
+        bodies.forEach((b) => {
+          const m = L.marker([b.lat, b.lng], { title: 'Reported body', icon: customMarker('#ff5a76') });
           m.bindPopup('Reported body');
           markersLayer.current.addLayer(m);
         });
